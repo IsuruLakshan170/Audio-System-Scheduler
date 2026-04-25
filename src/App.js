@@ -126,6 +126,11 @@ function App() {
   const lastPlayTriggerRef = useRef(null);
   const pendingAutoPlayRef = useRef(null);
   const catchUpPlayIdRef = useRef(null);
+  /** Serializes /api/status handling so a 2nd poll does not run catch-up while the 1st is still decoding. */
+  const statusChainRef = useRef(Promise.resolve());
+  /** Set when another tab (same origin) is handling the same schedule id (bell only reached one tab’s play_trigger). */
+  const otherTabPlayingIdRef = useRef(null);
+  const scheduleBcRef = useRef(null);
   const fetchStatusRef = useRef(async () => {});
   const checkTimeoutRef = useRef(null);
   const [isAutoTriggered, setIsAutoTriggered] = useState(false);
@@ -334,6 +339,29 @@ function App() {
     return () => clearInterval(statusInterval);
   }, []);
 
+  /** When two windows/tabs are open, only one receives play_trigger; others would catch-up and double audio. */
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return undefined;
+    const bc = new BroadcastChannel('daham-audio-scheduler');
+    scheduleBcRef.current = bc;
+    const onMsg = (ev) => {
+      if (ev.data?.type === 'bell-start' && ev.data?.scheduleId != null) {
+        otherTabPlayingIdRef.current = String(ev.data.scheduleId);
+        window.setTimeout(() => {
+          if (otherTabPlayingIdRef.current === String(ev.data.scheduleId)) {
+            otherTabPlayingIdRef.current = null;
+          }
+        }, 3 * 60 * 1000);
+      }
+    };
+    bc.addEventListener('message', onMsg);
+    return () => {
+      bc.removeEventListener('message', onMsg);
+      scheduleBcRef.current = null;
+      bc.close();
+    };
+  }, []);
+
   // Check 15 seconds after audio finishes if we should show close dialog
   useEffect(() => {
     if (!isAutoTriggered) return undefined;
@@ -384,71 +412,98 @@ function App() {
     );
   };
 
-  const fetchStatus = async () => {
-    try {
-      const res = await axios.get(`${API_BASE}/status`);
-      const data = res.data;
-      setBackendAvailable(true);
-      setStatus(data);
-      setIsBackendPlaying(data.playing || false);
+  const fetchStatus = () => {
+    const run = async () => {
+      try {
+        const res = await axios.get(`${API_BASE}/status`);
+        const data = res.data;
+        setBackendAvailable(true);
+        setStatus(data);
+        setIsBackendPlaying(data.playing || false);
 
-      if (!data.playing) {
-        catchUpPlayIdRef.current = null;
-      }
+        if (!data.playing) {
+          catchUpPlayIdRef.current = null;
+        }
 
-      if (data.play_trigger && data.play_trigger !== lastPlayTriggerRef.current) {
-        lastPlayTriggerRef.current = data.play_trigger;
-        setIsAutoTriggered(true);
-        if (data.audio_path) {
-          const payload = {
-            id: data.current_playing,
-            label: data.label,
-            event_at: data.event_at,
-            audio_path: data.audio_path,
-          };
-          if (!audioUnlockedRef.current) {
-            pendingAutoPlayRef.current = payload;
-            showToast(UI.scheduleBellTapToEnable, 'warning');
-            try {
-              await axios.post(`${API_BASE}/stop`);
-            } catch (e) {
-              console.error(e);
+        // New auto-fire in this /status response (not a duplicate read of a past trigger)
+        const isNewPlayTrigger =
+          Boolean(data.play_trigger) && data.play_trigger !== lastPlayTriggerRef.current;
+
+        if (isNewPlayTrigger) {
+          lastPlayTriggerRef.current = data.play_trigger;
+          setIsAutoTriggered(true);
+          if (data.audio_path) {
+            const payload = {
+              id: data.current_playing,
+              label: data.label,
+              event_at: data.event_at,
+              audio_path: data.audio_path,
+            };
+            // Before any await: mark this id so overlapping status polls (interval stacks up while
+            // fetch/decode is slow) will not use the catch-up path and start a 2nd AudioBufferSource.
+            catchUpPlayIdRef.current = data.current_playing;
+            if (scheduleBcRef.current && data.current_playing != null) {
+              try {
+                scheduleBcRef.current.postMessage({
+                  type: 'bell-start',
+                  scheduleId: data.current_playing,
+                });
+              } catch (_) {
+                /* ignore */
+              }
             }
-          } else {
-            await playAudioFromPath(payload);
+            if (!audioUnlockedRef.current) {
+              pendingAutoPlayRef.current = payload;
+              showToast(UI.scheduleBellTapToEnable, 'warning');
+              try {
+                await axios.post(`${API_BASE}/stop`);
+              } catch (e) {
+                console.error(e);
+              }
+            } else {
+              await playAudioFromPath(payload);
+            }
           }
         }
-      }
 
-      /* Backend says "playing" but no local buffer source — e.g. missed poll, tab background, or failed resume */
-      if (
-        data.playing &&
-        data.audio_path &&
-        audioUnlockedRef.current &&
-        !webAudioSourceRef.current &&
-        data.current_playing &&
-        catchUpPlayIdRef.current !== data.current_playing
-      ) {
-        const ctx = audioContextRef.current;
-        if (ctx?.state === 'suspended') {
-          await ctx.resume().catch(() => {});
+        /* Backend says "playing" but no local buffer source — e.g. missed poll, tab background, or failed resume.
+           Skip when this same poll just delivered a new play_trigger: stale `data.playing` after POST /stop
+           (Web Audio locked) was wrongly running catch-up in parallel with the bell handler. */
+        if (
+          !isNewPlayTrigger &&
+          otherTabPlayingIdRef.current !== String(data.current_playing ?? '') &&
+          data.playing &&
+          data.audio_path &&
+          audioUnlockedRef.current &&
+          !webAudioSourceRef.current &&
+          data.current_playing &&
+          catchUpPlayIdRef.current !== data.current_playing
+        ) {
+          const ctx = audioContextRef.current;
+          if (ctx?.state === 'suspended') {
+            await ctx.resume().catch(() => {});
+          }
+          try {
+            catchUpPlayIdRef.current = data.current_playing;
+            await playAudioFromPath({
+              id: data.current_playing,
+              label: data.label,
+              event_at: data.event_at,
+              audio_path: data.audio_path,
+            });
+          } catch (e) {
+            console.error('Catch-up playback failed', e);
+            catchUpPlayIdRef.current = null;
+          }
         }
-        try {
-          await playAudioFromPath({
-            id: data.current_playing,
-            label: data.label,
-            event_at: data.event_at,
-            audio_path: data.audio_path,
-          });
-          catchUpPlayIdRef.current = data.current_playing;
-        } catch (e) {
-          console.error('Catch-up playback failed', e);
-        }
+      } catch (error) {
+        setBackendAvailable(false);
+        console.error('Error fetching status', error);
       }
-    } catch (error) {
-      setBackendAvailable(false);
-      console.error('Error fetching status', error);
-    }
+    };
+    const tail = statusChainRef.current.then(() => run());
+    statusChainRef.current = tail.catch(() => {});
+    return tail;
   };
 
   const stopLocalPlaybackOnly = () => {
@@ -549,6 +604,7 @@ function App() {
     } catch (error) {
       console.error('Playback failed:', error);
       webAudioSourceRef.current = null;
+      catchUpPlayIdRef.current = null;
       setPlayingDialog(false);
       setCurrentPlayingSchedule(null);
       setIsPlaying(false);

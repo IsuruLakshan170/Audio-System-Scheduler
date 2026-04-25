@@ -38,6 +38,9 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 scheduler = BackgroundScheduler()
 scheduler.start()
 
+# Serialize play_state updates + /api/status so only one client reads play_trigger per fire.
+play_state_lock = threading.RLock()
+
 play_state = {
     "current_playing": None,
     "play_trigger": None,
@@ -94,66 +97,93 @@ def normalize_event_at_hhmm(event_at):
 
 
 def start_play(schedule_id, audio_path, label, event_at):
-    play_state["current_playing"] = schedule_id
-    play_state["current_audio_path"] = audio_path
-    play_state["current_label"] = label
-    play_state["current_event_at"] = event_at
+    with play_state_lock:
+        play_state["current_playing"] = schedule_id
+        play_state["current_audio_path"] = audio_path
+        play_state["current_label"] = label
+        play_state["current_event_at"] = event_at
 
 
 def trigger_auto_play(schedule_id, audio_path, label, event_at):
-    start_play(schedule_id, audio_path, label, event_at)
-    # Unique each fire so the frontend does not ignore repeats (same id next day / same minute retry).
-    play_state["play_trigger"] = f"{schedule_id}:{int(datetime.now().timestamp() * 1000)}"
-    play_state["play_start_time"] = datetime.now()
+    with play_state_lock:
+        play_state["current_playing"] = schedule_id
+        play_state["current_audio_path"] = audio_path
+        play_state["current_label"] = label
+        play_state["current_event_at"] = event_at
+        # Unique each fire so the frontend does not ignore repeats (same id next day / same minute retry).
+        play_state["play_trigger"] = f"{schedule_id}:{int(datetime.now().timestamp() * 1000)}"
+        play_state["play_start_time"] = datetime.now()
 
 def open_browser(url):
     """Open the default web browser."""
     webbrowser.open(url)
 
 def clear_play():
-    play_state["current_playing"] = None
-    play_state["play_trigger"] = None
-    play_state["current_audio_path"] = None
-    play_state["current_label"] = None
-    play_state["current_event_at"] = None
-    play_state["play_start_time"] = None
+    with play_state_lock:
+        play_state["current_playing"] = None
+        play_state["play_trigger"] = None
+        play_state["current_audio_path"] = None
+        play_state["current_label"] = None
+        play_state["current_event_at"] = None
+        play_state["play_start_time"] = None
 
 
 def check_schedules():
     now = datetime.now()
     current_time = now.strftime("%H:%M")
     data = load_schedules()
-   
-    
-    # Auto-clear current_playing if we've moved past that minute
-    if play_state["current_playing"] is not None:
-        ev_norm = normalize_event_at_hhmm(play_state["current_event_at"])
-        if ev_norm and ev_norm != current_time:
-            clear_play()
-        # Safety: clear if it's been playing for more than 2 minutes (frontend might have crashed)
-        elif play_state["play_start_time"]:
-            elapsed = (now - play_state["play_start_time"]).total_seconds()
-            if elapsed > 120:
+    with play_state_lock:
+        # Auto-clear current_playing if we've moved past that minute
+        if play_state["current_playing"] is not None:
+            ev_norm = normalize_event_at_hhmm(play_state["current_event_at"])
+            if ev_norm and ev_norm != current_time:
                 clear_play()
-    
-    # Don't check for new schedules while something is playing
-    if play_state["current_playing"] is not None:
-        return
-    
-    for schedule in data["schedules"]:
-        event_at = schedule.get("event_at", "")
-        enabled = schedule.get("enabled", False)
-        sched_hhmm = normalize_event_at_hhmm(event_at)
-        if not enabled or not sched_hhmm or sched_hhmm != current_time:
-            continue
-        # Include calendar date so the same clock time fires again on a new day while the server runs.
-        trigger_key = f"{schedule['id']}_{now.strftime('%Y-%m-%d')}_{current_time}"
-        if trigger_key != play_state["last_trigger"]:
-            play_state["last_trigger"] = trigger_key
-            trigger_auto_play(schedule["id"], schedule["audio_path"], schedule["label"], schedule["event_at"])
-            break
+            # Safety: clear if it's been playing for more than 2 minutes (frontend might have crashed)
+            elif play_state["play_start_time"]:
+                elapsed = (now - play_state["play_start_time"]).total_seconds()
+                if elapsed > 120:
+                    clear_play()
 
-scheduler.add_job(check_schedules, 'interval', seconds=1)
+        # Don't check for new schedules while something is playing
+        if play_state["current_playing"] is not None:
+            return
+
+        # Stable order when two slots share the same HH:MM (id tie-breaks).
+        schedules_sorted = sorted(
+            data["schedules"],
+            key=lambda s: (
+                normalize_event_at_hhmm(s.get("event_at")) or "99:99",
+                str(s.get("id", "")),
+            ),
+        )
+        for schedule in schedules_sorted:
+            event_at = schedule.get("event_at", "")
+            enabled = schedule.get("enabled", False)
+            sched_hhmm = normalize_event_at_hhmm(event_at)
+            if not enabled or not sched_hhmm or sched_hhmm != current_time:
+                continue
+            # Include calendar date so the same clock time fires again on a new day while the server runs.
+            trigger_key = f"{schedule['id']}_{now.strftime('%Y-%m-%d')}_{current_time}"
+            if trigger_key != play_state["last_trigger"]:
+                play_state["last_trigger"] = trigger_key
+                trigger_auto_play(
+                    schedule["id"],
+                    schedule["audio_path"],
+                    schedule["label"],
+                    schedule["event_at"],
+                )
+                break
+
+
+scheduler.add_job(
+    check_schedules,
+    "interval",
+    seconds=1,
+    max_instances=1,
+    coalesce=True,
+    id="check_schedules",
+    replace_existing=True,
+)
 
 _SI_WEEKDAY_EN_TO_SI = {
     "Monday": "සඳුදා",
@@ -289,7 +319,7 @@ def stop_audio():
     clear_play()
     return jsonify({"status": "stopped"})
 
-@app.route('/api/status')
+@app.route("/api/status")
 def get_status():
     now = datetime.now()
     data = load_schedules()
@@ -328,22 +358,23 @@ def get_status():
                     next_event = next_schedule["label"]
                     next_event_at = normalize_event_at_hhmm(next_schedule.get("event_at"))
 
-    response = {
-        "current_time": _format_datetime_sinhala(now),
-        "next_event": next_event,
-        "next_event_at": next_event_at,
-        "time_remaining": time_remaining,
-        "playing": play_state["current_playing"] is not None,
-        "current_playing": play_state["current_playing"],
-        "play_trigger": play_state["play_trigger"],
-        "audio_path": play_state["current_audio_path"],
-        "label": play_state["current_label"],
-        "event_at": play_state["current_event_at"]
-    }
+    with play_state_lock:
+        trigger_for_client = play_state["play_trigger"]
+        play_state["play_trigger"] = None
+        response = {
+            "current_time": _format_datetime_sinhala(now),
+            "next_event": next_event,
+            "next_event_at": next_event_at,
+            "time_remaining": time_remaining,
+            "playing": play_state["current_playing"] is not None,
+            "current_playing": play_state["current_playing"],
+            "play_trigger": trigger_for_client,
+            "audio_path": play_state["current_audio_path"],
+            "label": play_state["current_label"],
+            "event_at": play_state["current_event_at"],
+        }
 
-    play_state["play_trigger"] = None
-
-    return jsonify(response)  # ✅ ALWAYS return
+    return jsonify(response)
 
 
 def _shutdown_server():
@@ -363,7 +394,8 @@ def exit_app():
     return jsonify({"message": "සේවාදායකය නිවා දමමින්..."})
 
 
-if __name__ == '__main__':
-    open_browser("http://localhost:5000/")
-    # Run the Flask app
+if __name__ == "__main__":
+    # Avoid a second browser window if you already use the desktop shell (set SKIP_OPEN_BROWSER=1).
+    # if os.environ.get("SKIP_OPEN_BROWSER", "").strip().lower() not in ("1", "true", "yes"):
+    #     open_browser("http://localhost:5000/")
     app.run(debug=False, use_reloader=False, use_debugger=False, port=5000)

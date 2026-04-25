@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ¯Ä¸Ê ´ÏÃ½Ê ÁÊ»ÀÊº šÅ¸±Ïš»« ´¯Ê°­Ò  app mark
+  Motif: time (šÏ½Ã§Ä±) + sound (ÁÊ»ÀÊº) on a calm school-night palette
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Audio scheduler">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e3a5a"/>
+      <stop offset="100%" stop-color="#0f1f2e"/>
+    </linearGradient>
+  </defs>
+  <circle cx="64" cy="64" r="60" fill="url(#bg)" stroke="#c9a43a" stroke-width="3"/>
+  <!-- 12 o'clock mark (scheduled time) -->
+  <line x1="64" y1="18" x2="64" y2="28" stroke="#e8d5a0" stroke-width="3" stroke-linecap="round"/>
+  <!-- sound waves (left) -->
+  <path d="M 38 48 Q 32 64 38 80" fill="none" stroke="#e8d5a0" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M 30 40 Q 20 64 30 88" fill="none" stroke="#c9a43a" stroke-width="3" stroke-linecap="round" opacity="0.95"/>
+  <path d="M 22 34 Q 8 64 22 94" fill="none" stroke="#8b7355" stroke-width="2.5" stroke-linecap="round" opacity="0.85"/>
+  <!-- speaker / tone center -->
+  <path d="M 52 52 L 52 76 L 62 70 L 72 80 L 72 48 L 62 58 Z" fill="#f4ead4" stroke="#c9a43a" stroke-width="1.2" stroke-linejoin="round"/>
+  <circle cx="82" cy="64" r="4" fill="#c9a43a"/>
+  <!-- small arc = clock / schedule -->
+  <path d="M 88 48 A 22 22 0 0 1 88 80" fill="none" stroke="#7a6a4a" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
+</svg>

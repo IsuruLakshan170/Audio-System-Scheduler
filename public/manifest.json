@@ -1,0 +1,32 @@
+{
+  "short_name": "ශ්‍රව්‍ය කළමනාකරණය",
+  "name": "දහම් පාසල් ශ්‍රව්‍ය කළමනාකරණ පද්ධතිය",
+  "description": "කාලසටහන සහිත ශ්‍රව්‍ය උපකරණ",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "32x32 16x16",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "logo192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "logo512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#1e3a5a",
+  "background_color": "#0f1f2e"
+}

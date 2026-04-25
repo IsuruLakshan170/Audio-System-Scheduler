@@ -1,2 +1,3 @@
-# Optional: only needed to build AudioScheduler.exe (see dep_desktop.py)
+# Optional: only needed to build AudioScheduler.exe (see dep_desktop.py) and regen icons
 pyinstaller>=6.0
+Pillow>=10.0.0
