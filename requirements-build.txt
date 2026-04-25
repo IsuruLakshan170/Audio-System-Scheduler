@@ -1,0 +1,2 @@
+# Optional: only needed to build AudioScheduler.exe (see dep_desktop.py)
+pyinstaller>=6.0

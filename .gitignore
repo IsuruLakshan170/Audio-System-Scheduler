@@ -1,0 +1,52 @@
+# --- Dependencies (reinstall with npm / pip) ---
+node_modules/
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+pip-log.txt
+pip-wheel-metadata/
+
+# --- Build & distribution (rebuild with npm run build, dep_*.py) ---
+# CRA production bundle and PyInstaller work output both use `build/`
+/build/
+dist/
+*.spec
+
+# --- App runtime / user data (do not commit) ---
+data.json
+uploads/
+
+# --- Environment & secrets ---
+.env
+.env.*.local
+.env.local
+*.pem
+
+# --- Logs & debug ---
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# --- Test / coverage ---
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# --- Editors (uncomment if you do not want to share) ---
+# .vscode/
+# .idea/

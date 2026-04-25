@@ -1,0 +1,5 @@
+Flask==2.3.3
+Flask-CORS==4.0.0
+APScheduler==3.10.4
+python-multipart==0.0.6
+pywebview>=4.4
